@@ -43,8 +43,78 @@ static char code_playerID_not_found[] = "-1";
 static char code_player_passwd_wrong[] = "-1";
 
 
-
 int portSSL = 19918;
+
+int create_socket(int serverPort) // Code used from https://wiki.openssl.org/index.php/Simple_TLS_Server
+{
+	int s;
+	struct sockaddr_in addr;
+
+	addr.sin_family = AF_INET;
+	addr.sin_port = htons(serverPort);
+	addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	s = socket(AF_INET, SOCK_STREAM, 0);
+	if (s < 0)
+	{
+		perror("Unable to create socket");
+		exit(EXIT_FAILURE);
+	}
+
+	if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0)
+	{
+		perror("Unable to bind");
+		exit(EXIT_FAILURE);
+	}
+
+	if (listen(s, 1) < 0)
+	{
+		perror("Unable to listen");
+		exit(EXIT_FAILURE);
+	}
+
+
+	return s;
+
+}
+
+
+SSL_CTX *create_context() // Code used from https://wiki.openssl.org/index.php/Simple_TLS_Server
+{
+	const SSL_METHOD *method;
+	SSL_CTX *ctx;
+
+	method = TLS_server_method();
+
+	ctx = SSL_CTX_new(method);
+	if (!ctx)
+	{
+		perror("Unable to create SSL context");
+		ERR_print_errors_fp(stderr);
+		exit(EXIT_FAILURE);
+	}
+
+	return ctx;
+
+
+}
+
+void configure_context(SSL_CTX *ctx) // Code used from https://wiki.openssl.org/index.php/Simple_TLS_Server
+{
+	/* Set the key and cert */
+	if (SSL_CTX_use_certificate_file(ctx, "cert.pem", SSL_FILETYPE_PEM) <= 0)
+	{
+		ERR_print_errors_fp(stderr);
+		exit(EXIT_FAILURE);
+	}
+	
+	if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 )
+	{
+		ERR_print_errors_fp(stderr);
+		exit(EXIT_FAILURE);
+	}
+}
+
 
 char *randStrGen(int randLen)
 {
@@ -286,6 +356,26 @@ int checkPlayerPasswd(char playerid[10], char playerpasswd[25])
 	return success;
 }
 
+int payment(char sender[10], char sentto[10], char amount[20])
+{
+	
+}
+
+int walletBal(char playerid[10])
+{
+	
+}
+
+char *incomingInvoices(char playerid[10])
+{
+	
+}
+
+int payInvoice(char invoiceID[20])
+{
+	
+}
+
 int sendInvoice(char sender[10], char sentTo[10], char amt[15])
 {
 	int suc;
@@ -340,77 +430,6 @@ int sendInvoice(char sender[10], char sentTo[10], char amt[15])
 	return suc;
 }
 
-int create_socket(int serverPort) // Code used from https://wiki.openssl.org/index.php/Simple_TLS_Server
-{
-	int s;
-	struct sockaddr_in addr;
-
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(serverPort);
-	addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-	s = socket(AF_INET, SOCK_STREAM, 0);
-	if (s < 0)
-	{
-		perror("Unable to create socket");
-		exit(EXIT_FAILURE);
-	}
-
-	if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0)
-	{
-		perror("Unable to bind");
-		exit(EXIT_FAILURE);
-	}
-
-	if (listen(s, 1) < 0)
-	{
-		perror("Unable to listen");
-		exit(EXIT_FAILURE);
-	}
-
-
-	return s;
-
-}
-
-
-SSL_CTX *create_context() // Code used from https://wiki.openssl.org/index.php/Simple_TLS_Server
-{
-	const SSL_METHOD *method;
-	SSL_CTX *ctx;
-
-	method = TLS_server_method();
-
-	ctx = SSL_CTX_new(method);
-	if (!ctx)
-	{
-		perror("Unable to create SSL context");
-		ERR_print_errors_fp(stderr);
-		exit(EXIT_FAILURE);
-	}
-
-	return ctx;
-
-
-}
-
-void configure_context(SSL_CTX *ctx) // Code used from https://wiki.openssl.org/index.php/Simple_TLS_Server
-{
-	/* Set the key and cert */
-	if (SSL_CTX_use_certificate_file(ctx, "cert.pem", SSL_FILETYPE_PEM) <= 0)
-	{
-		ERR_print_errors_fp(stderr);
-		exit(EXIT_FAILURE);
-	}
-	
-	if (SSL_CTX_use_PrivateKey_file(ctx, "key.pem", SSL_FILETYPE_PEM) <= 0 )
-	{
-		ERR_print_errors_fp(stderr);
-		exit(EXIT_FAILURE);
-	}
-}
-
-
 void * connection(void* p_client)
 {
 	int client = *((int*)p_client);
@@ -420,6 +439,7 @@ void * connection(void* p_client)
 	char clientCMD[256];
 	char buffer[256];
 	char serverMessage[1024];
+	char helpMessage[] = "List of avalible commands:\n";
 	int i;
 	int sc;
 	char argArray[10][20];
@@ -434,10 +454,13 @@ void * connection(void* p_client)
 	
 	ssl = SSL_new(ctx);
 	SSL_set_fd(ssl, client);
+	
+	printf("Client Connecting..\n");
 
 	if (SSL_accept(ssl) <= 0) 
 	{
 		ERR_print_errors_fp(stderr);
+		fprintf(stderr, "Client Tried Connecting, Connectiong Refused..\n");
 	}
 	else
 	{
@@ -501,12 +524,13 @@ void * connection(void* p_client)
 						argArray[2], argArray[3], argArray[4], argArray[5], argArray[6], argArray[7], argArray[8], argArray[9]);
 						break;
 				}
+				
 				if (strcmp(argArray[0], "invoice") == 0)
 				{
-					/*if (strcmp(argArray[1], "incoming") == 0)
+					if (strcmp(argArray[1], "incoming") == 0)
 					{
-						
-					}*/
+						SSL_write(ssl, incomingInvoices(playerid), 1024);
+					}
 					else if (strcmp(argArray[1], "send") == 0)
 					{
 						res = sendInvoice(playerid, argArray[2], argArray[3]);
@@ -519,10 +543,48 @@ void * connection(void* p_client)
 							SSL_write(ssl, "Failed to send Invoice", 25);
 						}
 					}
-					//else if (strcmp(argArray[1], "pay") == 0)
+					else if (strcmp(argArray[1], "pay") == 0)
+					{
+						res = payInvoice(argArray[2]);
+						if (res == 0)
+						{
+							SSL_write(ssl, "Payment Sent", 20);
+						}
+						else
+						{
+							SSL_write(ssl, "Failed to send Payment", 30);
+						}
+					}
+					else
+					{
+						SSL_write(ssl, "Wrong Syntax, Try 'send <Invoice Receiver> <Amount>' or 'pay <Payment Receiver> <Amount>'", 256);
+					}
+				}
+				else if (strcmp(argArray[0], "pay") == 0)
+				{
+					res = payment(playerid, argArray[1], argArray[2]);
+					if (res == 0)
+					{
+						SSL_write(ssl, "Payment Sent", 20);
+					}
+					else if (argArray[1][0] == '\0' || argArray[2][0] == '\0')
+					{
+						SSL_write(ssl, "Wrong Syntax, Try 'pay <Receiver> <Amount>'", 100);
+					}
+					else
+					{
+						SSL_write(ssl, "Failed to send Payment", 30);
+					}
+				}
+				else if (strcmp(argArray[0], "help") == 0)
+				{
+					SSL_write(ssl, helpMessage, 1024);
+				}
+				else
+				{
+					SSL_write(ssl, "Command Not Found. Try 'help' for a list of commands!", 100);
 				}
 				//else if (strcmp(argArray[0], "bal") == 0)
-				//else if (strcmp(argArray[0], "pay") == 0)
 			}
 			else
 			{
@@ -599,6 +661,8 @@ int main()
 	
 	printf("Performing Table Checks\n");
 	
+	int check = 0;
+	
 	if (tableCheck("Players") == 0)
 	{
 		printf("Table 'Players' Found in Database\n");
@@ -607,10 +671,13 @@ int main()
 	{
 		printf("Table 'Players' Not Found in Database\n");
 		createTable("Players", "playerID", "VARCHAR(10)");
+		sleep(1);
 		addCol("Players", "playerID", "Player_Name", "VARCHAR(25)");
+		sleep(1);
 		addCol("Players", "Player_Name", "Password", "VARCHAR(25)");
+		check = 1;
 	}
-	
+
 	if (tableCheck("Invoices") == 0)
 	{
 		printf("Table 'Invoices' Found in Database\n");
@@ -618,12 +685,53 @@ int main()
 	else
 	{
 		printf("Table 'Invoices' Not Found in Database\n");
-		createTable("Invoices", "InvoiceID", "VARCHAR(25)");
+		createTable("Invoices", "InvoiceID", "VARCHAR(20)");
+		sleep(1);
 		addCol("Invoices", "InvoiceID", "Sent_by", "VARCHAR(10)");
+		sleep(1);
 		addCol("Invoices", "Sent_by", "Sent_to", "VARCHAR(10)");
+		sleep(1);
 		addCol("Invoices", "Sent_to", "Amount", "VARCHAR(20)");
+		sleep(1);
 		addCol("Invoices", "Amount", "Date", "VARCHAR(20)");
+		sleep(1);
 		addCol("Invoices",  "Date", "Paid_Status", "VARCHAR(6)");
+	}
+	
+	if (tableCheck("Payments") == 0)
+	{
+		printf("Table 'Payments' Found in Database\n");
+	}
+	else
+	{
+		printf("Table 'Payments' Not Found in Database\n");
+		createTable("Payments", "paymentID", "VARCHAR(20)");
+		sleep(1);
+		addCol("Payments", "paymentID", "pay_by", "VARCHAR(10)");
+		sleep(1);
+		addCol("Payments", "pay_by", "pay_to", "VARCHAR(10)");
+		sleep(1);
+		addCol("Payments", "pay_to", "Amount", "VARCHAR(20)");	
+		sleep(1);
+		addCol("Payments", "Amount", "payment_date", "VARCHAR(20)");	
+	}
+	
+	if (tableCheck("Wallet") == 0)
+	{
+		printf("Table 'Wallet' Found in Database\n");
+	}
+	else
+	{
+		printf("Table 'Wallet' Not Found in Database\n");
+		createTable("Wallet", "playerID", "VARCHAR(10)");
+		sleep(1);
+		addCol("Wallet", "playerID", "Balance", "VARCHAR(20)");
+	}
+	
+	if (check == 1)
+	{
+		printf("Server setup done! Please restart!\n\n");
+		exit(0);
 	}
 	
 	/* perform table check ^^^ */
