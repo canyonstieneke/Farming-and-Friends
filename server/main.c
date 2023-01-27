@@ -45,6 +45,16 @@ static char code_player_passwd_wrong[] = "-1";
 
 int portSSL = 19918;
 
+char *getDate()
+{
+	char *date;
+	time_t t = time(NULL);
+	struct tm tm = *localtime(&t);
+	sprintf(date, "%d-%02d-%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+	
+	return date;
+}
+
 int create_socket(int serverPort) // Code used from https://wiki.openssl.org/index.php/Simple_TLS_Server
 {
 	int s;
@@ -356,19 +366,150 @@ int checkPlayerPasswd(char playerid[10], char playerpasswd[25])
 	return success;
 }
 
-int payment(char sender[10], char sentto[10], char amount[20])
-{
-	
-}
-
 int walletBal(char playerid[10])
 {
+	int bal;
+	int ret;
+	char queryCMD[100];
+	do
+	{
+		ret = 0;
+		
+		sprintf(queryCMD, "SELECT Wallet FROM Players WHERE playerID = '%s';", playerid);
 	
+		if (mysql_query(conn, queryCMD))
+		{
+			fprintf(stderr, "\nError: %s [%d]\n", mysql_error(conn), mysql_errno(conn));
+		}
+	
+		MYSQL_RES *result = mysql_store_result(conn);
+	
+		if (result == NULL)
+		{
+			ret = 1;
+			
+			sprintf(queryCMD, "UPDATE Players SET Wallet = 0 WHERE playerID = '%s';", playerid);
+			
+			if (mysql_query(conn, queryCMD))
+			{
+				fprintf(stderr, "\nError: %s [%d]\n", mysql_error(conn), mysql_errno(conn));
+			}
+			
+			mysql_free_result(result);
+		}
+		else
+		{
+			MYSQL_ROW row;
+			row = mysql_fetch_row(result);
+			
+			bal = atoi(row[0]);
+			
+			mysql_free_result(result);
+		}
+	}
+	while (ret == 1);
+	
+	return bal;
+}
+
+int walletIncrease(char playerid[10], int amt)
+{
+	int suc;
+	char queryCMD[100];
+	
+	int balBef = walletBal(playerid);
+	int balAft = balBef + amt;
+	
+	sprintf(queryCMD, "UPDATE Players SET Wallet = %d WHERE playerID = '%s';", balAft, playerid);
+	if (mysql_query(conn, queryCMD))
+	{
+		fprintf(stderr, "\nError: %s [%d]\n", mysql_error(conn), mysql_errno(conn));
+		suc = 1;
+	}
+	else
+	{
+		suc = 0;
+	}
+	
+	return suc;
+}
+
+int walletDecrease(char playerid[10], int amt)
+{
+	int suc;
+	char queryCMD[100];
+	
+	int balBef = walletBal(playerid);
+	int balAft = balBef - amt;
+	
+	sprintf(queryCMD, "UPDATE Players SET Wallet = %d WHERE playerID = '%s';", balAft, playerid);
+	if (mysql_query(conn, queryCMD))
+	{
+		fprintf(stderr, "\nError: %s [%d]\n", mysql_error(conn), mysql_errno(conn));
+		suc = 1;
+	}
+	else
+	{
+		suc = 0;
+	}
+	
+	return suc;
+}
+
+int payment(char sender[10], char sentto[10], int amount)
+{
+	int suc;
+	
+	if (walletIncrease(sentto, amount) == 0)
+	{
+		suc = 0;
+		if (walletDecrease(sender, amount) != 0)
+		{
+			suc = 1;
+		}
+	}
+	else
+	{
+		suc = 1;
+	}
+	
+	return suc;
 }
 
 char *incomingInvoices(char playerid[10])
 {
+	char queryCMD[100];
+	sprintf(queryCMD, "SELECT * FROM Invoices WHERE Sent_to = '%s'", playerid);
+	char *buffer = malloc(1024);
 	
+	if (mysql_query(conn, queryCMD))
+	{
+		fprintf(stderr, "\nError: %s [%d]\n", mysql_error(conn), mysql_errno(conn));
+	}
+	
+	MYSQL_RES *result = mysql_store_result(conn);
+	
+	if (result != NULL)
+	{
+		int num_fields = mysql_num_fields(result);
+		
+		MYSQL_ROW row;
+		
+		while ((row = mysql_fetch_row(result)))
+		{
+			for (int i = 0; i <= num_fields; i++)
+			{
+				strcat(buffer, row[i] ? row[i] : "NULL");
+				strcat(buffer, " ");
+			}
+			
+			strcat(buffer, "\n");
+		}
+	}
+	
+	mysql_free_result(result);
+	
+	return buffer;
 }
 
 int payInvoice(char invoiceID[20])
@@ -376,7 +517,7 @@ int payInvoice(char invoiceID[20])
 	
 }
 
-int sendInvoice(char sender[10], char sentTo[10], char amt[15])
+int sendInvoice(char sender[10], char sentTo[10], int amt)
 {
 	int suc;
 	char queryCMD[100];
@@ -407,13 +548,10 @@ int sendInvoice(char sender[10], char sentTo[10], char amt[15])
 		}
 	}
 	
-	char date[20];
-	time_t t = time(NULL);
-	struct tm tm = *localtime(&t);
-	sprintf(date, "%d/%02d/%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+	char *date = getDate();
 	
 	sprintf(insertCMD,
-	"INSERT INTO `Invoices`(InvoiceID, Sent_by, Sent_to, Amount, Date) VALUES (\"%s\", \"%s\", \"%s\", \"%s\", \"%s\");",
+	"INSERT INTO `Invoices`(InvoiceID, Sent_by, Sent_to, Amount, Date) VALUES (\"%s\", \"%s\", \"%s\", %d, \"%s\");",
 	randomID, sender, sentTo, amt, date);
 	
 	if (mysql_query(conn, insertCMD))
@@ -440,8 +578,8 @@ void * connection(void* p_client)
 	char buffer[256];
 	char serverMessage[1024];
 	char helpMessage[] = "List of avalible commands:\n";
-	int i;
-	int sc;
+	int i = 0;
+	int sc = 0;
 	char argArray[10][20];
 	int res;
 	int suc;
@@ -477,21 +615,23 @@ void * connection(void* p_client)
 				{
 					if (clientCMD[i] == ' ')
 					{
-						if (clientCMD[i + 1] != ' ' && clientCMD[i + 1] != '\0')
+						if (clientCMD[i + 1] != ' ' || clientCMD[i + 1] != '\0')
 						{
 							sc++;
 						}
 						else if (clientCMD[i + 1] == ' ')
 						{
-							clientCMD[i + 1] = '\0'; 
+							clientCMD[i] = '\0'; 
 						}
 					}
+					
 					i++;
 				}
+				printf("I made it here");
 				switch (sc)
 				{
 					case 0:
-						scanf(clientCMD, "%s", argArray[0]);
+						sscanf(clientCMD, "%s", argArray[0]);
 						break;
 					case 1:
 						sscanf(clientCMD, "%s %s", argArray[0], argArray[1]);
@@ -524,7 +664,6 @@ void * connection(void* p_client)
 						argArray[2], argArray[3], argArray[4], argArray[5], argArray[6], argArray[7], argArray[8], argArray[9]);
 						break;
 				}
-				
 				if (strcmp(argArray[0], "invoice") == 0)
 				{
 					if (strcmp(argArray[1], "incoming") == 0)
@@ -533,7 +672,7 @@ void * connection(void* p_client)
 					}
 					else if (strcmp(argArray[1], "send") == 0)
 					{
-						res = sendInvoice(playerid, argArray[2], argArray[3]);
+						res = sendInvoice(playerid, argArray[2], atoi(argArray[3]));
 						if (res == 0)
 						{
 							SSL_write(ssl, "Invoice Sent", 15);
@@ -562,14 +701,10 @@ void * connection(void* p_client)
 				}
 				else if (strcmp(argArray[0], "pay") == 0)
 				{
-					res = payment(playerid, argArray[1], argArray[2]);
+					res = payment(playerid, argArray[1], atoi(argArray[2]));
 					if (res == 0)
 					{
 						SSL_write(ssl, "Payment Sent", 20);
-					}
-					else if (argArray[1][0] == '\0' || argArray[2][0] == '\0')
-					{
-						SSL_write(ssl, "Wrong Syntax, Try 'pay <Receiver> <Amount>'", 100);
 					}
 					else
 					{
@@ -580,11 +715,15 @@ void * connection(void* p_client)
 				{
 					SSL_write(ssl, helpMessage, 1024);
 				}
+				else if (strcmp(argArray[0], "bal") == 0)
+				{
+					sprintf(serverMessage, "%d", walletBal(playerid));
+					SSL_write(ssl, serverMessage, 150);
+				}
 				else
 				{
 					SSL_write(ssl, "Command Not Found. Try 'help' for a list of commands!", 100);
 				}
-				//else if (strcmp(argArray[0], "bal") == 0)
 			}
 			else
 			{
@@ -661,8 +800,6 @@ int main()
 	
 	printf("Performing Table Checks\n");
 	
-	int check = 0;
-	
 	if (tableCheck("Players") == 0)
 	{
 		printf("Table 'Players' Found in Database\n");
@@ -675,7 +812,8 @@ int main()
 		addCol("Players", "playerID", "Player_Name", "VARCHAR(25)");
 		sleep(1);
 		addCol("Players", "Player_Name", "Password", "VARCHAR(25)");
-		check = 1;
+		sleep(1);
+		addCol("Players", "Password", "Wallet", "INT");
 	}
 
 	if (tableCheck("Invoices") == 0)
@@ -691,7 +829,7 @@ int main()
 		sleep(1);
 		addCol("Invoices", "Sent_by", "Sent_to", "VARCHAR(10)");
 		sleep(1);
-		addCol("Invoices", "Sent_to", "Amount", "VARCHAR(20)");
+		addCol("Invoices", "Sent_to", "Amount", "INT");
 		sleep(1);
 		addCol("Invoices", "Amount", "Date", "VARCHAR(20)");
 		sleep(1);
@@ -711,27 +849,9 @@ int main()
 		sleep(1);
 		addCol("Payments", "pay_by", "pay_to", "VARCHAR(10)");
 		sleep(1);
-		addCol("Payments", "pay_to", "Amount", "VARCHAR(20)");	
+		addCol("Payments", "pay_to", "Amount", "INT");	
 		sleep(1);
-		addCol("Payments", "Amount", "payment_date", "VARCHAR(20)");	
-	}
-	
-	if (tableCheck("Wallet") == 0)
-	{
-		printf("Table 'Wallet' Found in Database\n");
-	}
-	else
-	{
-		printf("Table 'Wallet' Not Found in Database\n");
-		createTable("Wallet", "playerID", "VARCHAR(10)");
-		sleep(1);
-		addCol("Wallet", "playerID", "Balance", "VARCHAR(20)");
-	}
-	
-	if (check == 1)
-	{
-		printf("Server setup done! Please restart!\n\n");
-		exit(0);
+		addCol("Payments", "Amount", "Date", "VARCHAR(20)");	
 	}
 	
 	/* perform table check ^^^ */
