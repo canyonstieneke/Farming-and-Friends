@@ -459,11 +459,57 @@ int walletDecrease(char playerid[10], int amt)
 int payment(char sender[10], char sentto[10], int amount)
 {
 	int suc;
+	char queryCMD[200];
 	
-	if (walletIncrease(sentto, amount) == 0)
+	char randomID[20];
+	int randIDExist = 1;
+	while (randIDExist == 1)
 	{
-		suc = 0;
-		if (walletDecrease(sender, amount) != 0)
+		strcpy(randomID, randStrGen(20));
+		sprintf(queryCMD, "SELECT InvoiceID FROM Invoices WHERE InvoiceID = '%s'", randomID);
+		if (mysql_real_query(conn, queryCMD, strlen(queryCMD)) == 0)
+		{
+			MYSQL_RES *result = mysql_use_result(conn);
+			if (result != NULL)
+			{
+				MYSQL_ROW row;
+				row = mysql_fetch_row(result);
+				if (row != NULL && strncmp(row[0], randomID, 20) == 0)
+				{
+					randIDExist = 1;
+				}
+				else
+				{
+					randIDExist = 0;
+				}
+			}
+			mysql_free_result(result);
+		}
+	}
+	
+	char *date = getDate();
+	
+	sprintf(queryCMD,
+	"INSERT INTO Payments (paymentID, pay_by, pay_to, Amount, Date) VALUES (\"%s\", \"%s\", \"%s\", %d, \"%s\");",
+	randomID, sender, sentto, amount, date);
+	
+	if (mysql_query(conn, queryCMD))
+	{
+		fprintf(stderr, "\nError: %s [%d]\n", mysql_error(conn), mysql_errno(conn));
+	}
+	
+	if (walletBal(sender) >= amount)
+	{	
+		if (walletIncrease(sentto, amount) == 0)
+		{
+			suc = 0;
+			if (walletDecrease(sender, amount) != 0)
+			{
+				
+				suc = 1;
+			}
+		}
+		else
 		{
 			suc = 1;
 		}
@@ -512,9 +558,98 @@ char *incomingInvoices(char playerid[10])
 	return buffer;
 }
 
-int payInvoice(char invoiceID[20])
+int payInvoice(char invoiceid[20], char playerid[10])
 {
+	int suc;
 	
+	char queryCMD[100];
+	sprintf(queryCMD, "SELECT Paid_Status, Amount, Sent_to, Sent_by FROM Invoices WHERE InvoiceID = '%s'", invoiceid);
+	char *buffer = malloc(1024);
+	char sentto[10];
+	char sentby[10];
+	int amount;
+	char amt[100];
+	char paidstatus[7];
+	char token[4][1024];
+	
+	
+	if (mysql_query(conn, queryCMD))
+	{
+		fprintf(stderr, "\nError: %s [%d]\n", mysql_error(conn), mysql_errno(conn));
+	}
+	
+	MYSQL_RES *result = mysql_store_result(conn);
+	
+	if (result != NULL)
+	{
+		suc = 0;
+		int num_fields = mysql_num_fields(result);
+		
+		MYSQL_ROW row;
+		
+		while ((row = mysql_fetch_row(result)))
+		{
+			for (int i = 0; i < num_fields; i++)
+			{
+				sprintf(buffer, "%s", row[i] ? row[i] : "NULL");
+				sscanf(buffer, "%s", token[i]);
+			}
+		}
+		
+		printf("%s", token[2]);
+		
+		sprintf(paidstatus, "%s", token[0]);
+		sprintf(sentto, "%s", token[2]);
+		sprintf(sentby, "%s", token[3]);
+		amount = atoi(token[1]);
+		
+		//sscanf(buffer, "%s %s %s %s", paidstatus, amt, sentto, sentby);
+		//amount = atoi(amt);
+		
+		//printf("\n%s\n%d\n%s\n%s\n", paidstatus, amount, token[2], sentby);
+		
+		
+		if ((strncmp(token[2], playerid, 10)) == 0)
+		{
+			if ((strncmp(paidstatus, "UNPAID", 6)) == 0)
+			{
+				sprintf(queryCMD, "UPDATE Invoices SET Paid_Status = \"PAID\" WHERE InvoiceID = '%s'", invoiceid);
+				if (mysql_query(conn, queryCMD))
+				{
+					fprintf(stderr, "\nError: %s [%d]\n", mysql_error(conn), mysql_errno(conn));
+					suc = 1;
+				}
+				else
+				{
+					suc = 0;
+					if ((payment(playerid, sentby, amount)) == 0)
+					{
+						suc = 0;
+					}
+					else
+					{
+						suc = 1;
+					}
+				}
+			}
+			else
+			{
+				suc = 1;
+			}
+		}
+		else 
+		{
+			suc = 1;
+		}
+	}
+	else
+	{
+		suc = 1;
+	}
+	
+	mysql_free_result(result);
+	
+	return suc;
 }
 
 int sendInvoice(char sender[10], char sentTo[10], int amt)
@@ -551,7 +686,7 @@ int sendInvoice(char sender[10], char sentTo[10], int amt)
 	char *date = getDate();
 	
 	sprintf(insertCMD,
-	"INSERT INTO `Invoices`(InvoiceID, Sent_by, Sent_to, Amount, Date) VALUES (\"%s\", \"%s\", \"%s\", %d, \"%s\");",
+	"INSERT INTO `Invoices`(InvoiceID, Sent_by, Sent_to, Amount, Date, Paid_Status) VALUES (\"%s\", \"%s\", \"%s\", %d, \"%s\", \"UNPAID\");",
 	randomID, sender, sentTo, amt, date);
 	
 	if (mysql_query(conn, insertCMD))
@@ -577,7 +712,11 @@ void * connection(void* p_client)
 	char clientCMD[256];
 	char buffer[256];
 	char serverMessage[1024];
-	char helpMessage[] = "List of avalible commands:\n";
+	char helpMessage[] = 
+	"List of avalible commands:\n"
+	"invoice incoming - Check incoming invoices\n"
+	"invoice send <sent to> <Amount> - Send an invoice to someone\n"
+	"invoice pay <invoiceID> - Pay an invoice\n";
 	int i = 0;
 	int sc = 0;
 	char argArray[10][20];
@@ -603,9 +742,13 @@ void * connection(void* p_client)
 	else
 	{
 		SSL_read(ssl, buffer, 256);
-		sscanf(buffer, "%s %s %[a-zA-Z0-9 ]", playerid, playerpasswd, clientCMD);
+		char *buf2 = malloc(256);
+		strcpy(buf2, buffer);
+		strcpy(playerid, (strtok_r(buf2, " ", &buf2)));
+		strcpy(playerpasswd, (strtok_r(buf2, " ", &buf2)));
+		strcpy(clientCMD, (strtok_r(buf2, "\n", &buf2)));
 		
-		printf("\nUSERNAME: %s\nPASSWORD: %s\nCOMMAND: %s\n", playerid, playerpasswd, clientCMD);
+		//printf("\nUSERNAME: %s\nPASSWORD: %s\nCOMMAND: %s\n", playerid, playerpasswd, clientCMD);
 		
 		if (checkPlayerID(playerid) == 0)
 		{
@@ -684,7 +827,7 @@ void * connection(void* p_client)
 					}
 					else if (strcmp(argArray[1], "pay") == 0)
 					{
-						res = payInvoice(argArray[2]);
+						res = payInvoice(argArray[2], playerid);
 						if (res == 0)
 						{
 							SSL_write(ssl, "Payment Sent", 20);
@@ -719,6 +862,43 @@ void * connection(void* p_client)
 				{
 					sprintf(serverMessage, "%d", walletBal(playerid));
 					SSL_write(ssl, serverMessage, 150);
+				}
+				else if (strcmp(argArray[0], "shop") == 0)
+				{
+					if (strcmp(argArray[1], "listings") == 0)
+					{
+						// add grab shop listings function
+					}
+					else if (strcmp(argArray[1], "buy") == 0)
+					{
+						// add shop buy function
+					}
+				}
+				else if (strcmp(argArray[0], "market") == 0)
+				{
+					if (strcmp(argArray[1], "listings") == 0)
+					{
+						// add grab listings function
+					}
+					else if (strcmp(argArray[1], "sell") == 0)
+					{
+						// add sell asset on market function
+					}
+					else if (strcmp(argArray[1], "buy") == 0)
+					{
+						// add buy off market function
+					}
+				}
+				else if (strcmp(argArray[0], "sell") == 0)
+				{
+					if (strcmp(argArray[1], "request") == 0)
+					{
+						// add request function
+					}
+					else if (strcmp(argArray[1], "approve") == 0)
+					{
+						// add approve fucntion
+					}
 				}
 				else
 				{
@@ -815,6 +995,8 @@ int main()
 		sleep(1);
 		addCol("Players", "Password", "Wallet", "INT");
 	}
+	
+	sleep(1);
 
 	if (tableCheck("Invoices") == 0)
 	{
@@ -833,8 +1015,10 @@ int main()
 		sleep(1);
 		addCol("Invoices", "Amount", "Date", "VARCHAR(20)");
 		sleep(1);
-		addCol("Invoices",  "Date", "Paid_Status", "VARCHAR(6)");
+		addCol("Invoices",  "Date", "Paid_Status", "VARCHAR(10)");
 	}
+	
+	sleep(1);
 	
 	if (tableCheck("Payments") == 0)
 	{
@@ -851,7 +1035,61 @@ int main()
 		sleep(1);
 		addCol("Payments", "pay_to", "Amount", "INT");	
 		sleep(1);
-		addCol("Payments", "Amount", "Date", "VARCHAR(20)");	
+		addCol("Payments", "Amount", "Date", "VARCHAR(10)");	
+	}
+	
+	sleep(1);
+	
+	if (tableCheck("Equipment") == 0)
+	{
+		printf("Table 'Equipment' Found in Database\n");
+	}
+	else
+	{
+		printf("Table 'Equipment' Not Found in Database\n");
+		createTable("Equipment", "EquipmentID", "VARCHAR(20)");
+		sleep(1);
+		addCol("Equipment", "EquipmentID", "EquipmentName", "VARCHAR(20)");
+		sleep(1);
+		addCol("Equipment", "EquipmentName", "price", "INT");
+	}
+	
+	sleep(1);
+	
+	if (tableCheck("Commodity") == 0)
+	{
+		printf("Table 'Commodity' Found in Database\n");
+	}
+	else
+	{
+		printf("Table 'Commodity' Not Found in Database\n");
+		createTable("Commodity", "CommodityID", "VARCHAR(20)");
+		sleep(1);
+		addCol("Commodity", "CommodityID", "CommodityName", "VARCHAR(20)");
+		sleep(1);
+		addCol("Commodity", "EquipmentName", "price", "INT");
+	}
+	
+	sleep(1);
+	
+	if (tableCheck("Assets") == 0)
+	{
+		printf("Table 'Assets' Not Found in Database\n");
+	}
+	else
+	{
+		printf("Table 'Assets' Not Found in Database\n");
+		createTable("Assets", "AssetOwner", "VARCHAR(10)");
+		sleep(1);
+		addCol("Assets", "AssetOwner", "AssetType", "VARCHAR(20)");
+		sleep(1);
+		addCol("Assets", "AssetType", "AssetID", "VARCHAR(20)");
+		sleep(1);
+		addCol("Assets", "AssetID", "SerialNum", "VARCHAR(20)");
+		sleep(1);
+		addCol("Assets", "SerialNum", "worth", "INT");
+		sleep(1);
+		addCol("Assets", "worth", "purchaseDate", "VARCHAR(10)");
 	}
 	
 	/* perform table check ^^^ */
